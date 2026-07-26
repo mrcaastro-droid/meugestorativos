@@ -482,3 +482,81 @@ export async function fetchProventosCached(ticker: string) {
   proventosCache.set(ticker.toUpperCase(), promise);
   return promise;
 }
+
+export interface UpcomingDividend {
+  ticker: string;
+  date: string;
+  value: number;
+  type: string;
+}
+
+export async function fetchUpcomingDividends(tickers: string[]): Promise<UpcomingDividend[]> {
+  if (tickers.length === 0) return [];
+  const results: UpcomingDividend[] = [];
+  const today = new Date().toISOString().slice(0, 10);
+
+  for (const ticker of tickers) {
+    try {
+      const isFii = ticker.toUpperCase().endsWith('11');
+      const path = isFii ? `fiis/${ticker.toLowerCase()}` : `acoes/${ticker.toLowerCase()}`;
+      const html = await fetchViaProxy(`https://investidor10.com.br/${path}/proventos/`);
+      if (!html) continue;
+
+      const pattern = /<td[^>]*>\s*(Dividendo[s]?|Rend[^<]*)\s*<\/td>\s*<td[^>]*>\s*(\d{2}\/\d{2}\/\d{4})\s*<\/td>\s*<td[^>]*>\s*(\d{2}\/\d{2}\/\d{4})\s*<\/td>\s*<td[^>]*>\s*([\d.,]+)\s*<\/td>/gi;
+      const entries: { tipo: string; dataCom: string; pagamento: string; valor: number; payDate: Date }[] = [];
+      let match;
+      while ((match = pattern.exec(html)) !== null) {
+        const [, tipo, , pagamento, valorStr] = match;
+        const pm = pagamento.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+        if (!pm) continue;
+        const payDate = new Date(parseInt(pm[3]), parseInt(pm[2]) - 1, parseInt(pm[1]));
+        const valor = parseFloat(valorStr.replace(/\./g, '').replace(',', '.'));
+        if (isNaN(valor) || valor <= 0) continue;
+        entries.push({ tipo, dataCom: match[2], pagamento, valor, payDate });
+      }
+
+      if (entries.length < 3) continue;
+
+      const recent = entries.slice(0, 12);
+      const avgValor = recent.reduce((s, e) => s + e.valor, 0) / recent.length;
+
+      const payMonths = recent.map((e) => {
+        const d = e.payDate;
+        return { month: d.getMonth(), day: d.getDate() };
+      });
+      const monthFreq: Record<number, { count: number; avgDay: number; month: number }> = {};
+      for (const pm of payMonths) {
+        if (!monthFreq[pm.month]) monthFreq[pm.month] = { count: 0, avgDay: 0, month: pm.month };
+        monthFreq[pm.month].count++;
+        monthFreq[pm.month].avgDay += pm.day;
+      }
+      for (const key of Object.keys(monthFreq)) {
+        monthFreq[key].avgDay = Math.round(monthFreq[key].avgDay / monthFreq[key].count);
+      }
+
+      const now = new Date();
+      for (let m = 0; m < 12; m++) {
+        const targetMonth = (now.getMonth() + m) % 12;
+        const targetYear = now.getFullYear() + Math.floor((now.getMonth() + m) / 12);
+        const freq = monthFreq[targetMonth];
+        if (!freq || freq.count < 2) continue;
+
+        const payDate = new Date(targetYear, targetMonth, freq.avgDay);
+        if (payDate <= now) continue;
+
+        const dateStr = payDate.toISOString().slice(0, 10);
+        const tipo = recent[0]?.tipo?.trim() || "Dividendo";
+        results.push({
+          ticker: ticker.toUpperCase(),
+          date: dateStr,
+          value: Math.round(avgValor * 100) / 100,
+          type: tipo,
+        });
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  return results.sort((a, b) => a.date.localeCompare(b.date));
+}

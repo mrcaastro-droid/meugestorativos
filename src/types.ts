@@ -14,6 +14,7 @@ export interface Asset {
   quantity: number;
   goal: string;
   investedAmount: number;
+  manualInvested?: boolean;
   missing: number;
   currentDividend: number;
   annualReturn: number;
@@ -55,6 +56,7 @@ export interface TradeRecord {
   totalShares: number;
   avgPrice: number;
   operation: "COMPRA" | "VENDA";
+  note?: string;
   createdAt: string;
 }
 
@@ -75,6 +77,21 @@ export interface Lot {
   fees: number;
   remaining: number;
   createdAt: string;
+}
+
+export interface FixedIncomeRecord {
+  id: string;
+  name: string;
+  institution: string;
+  type: "CDB" | "LCI" | "LCA";
+  indexer: "CDI" | "IPCA" | "SELIC" | "PRE";
+  rate: number;
+  applicationDate: string;
+  maturityDate: string;
+  investedAmount: number;
+  currentValue: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface PortfolioSummary {

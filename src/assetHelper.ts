@@ -1,4 +1,4 @@
-import { getAssets, updateAsset, addAsset, deleteAsset, getTrades, addLot, consumeLots, getLots } from "./store";
+import { getAssets, updateAsset, addAsset, deleteAsset, getTrades } from "./store";
 import type { Asset } from "./types";
 import { detectAssetType } from "./detectType";
 import { getKnownSector } from "./sectorFetch";
@@ -6,9 +6,6 @@ import { getKnownSector } from "./sectorFetch";
 export function syncAssetsFromTrades(): void {
   const trades = getTrades();
 
-  // Rebuild lots from trades
-  const existingLots = getLots();
-  const lotTickerSet = new Set(existingLots.map((l) => l.ticker.toUpperCase()));
   const sorted = [...trades].sort((a, b) => {
     const dateCmp = a.date.localeCompare(b.date);
     if (dateCmp !== 0) return dateCmp;
@@ -18,39 +15,24 @@ export function syncAssetsFromTrades(): void {
     return a.id.localeCompare(b.id);
   });
 
-  // If no lots exist yet, create them from buy trades
-  if (existingLots.length === 0) {
-    for (const t of sorted) {
-      if (t.quantity > 0) {
-        addLot({
-          ticker: t.ticker.toUpperCase(),
-          purchaseDate: t.date,
-          quantity: Math.abs(t.quantity),
-          price: t.price,
-          fees: t.fees,
-          remaining: Math.abs(t.quantity),
-        });
-      }
-    }
-  }
-
-  // Calculate running position per ticker from all trades (using lots for sells)
-  const byTicker: Record<string, { shares: number; invested: number }> = {};
+  // Calculate running position per ticker from all trades (no side effects)
+  const byTicker: Record<string, { shares: number; invested: number; avgCost: number }> = {};
   for (const t of sorted) {
     const qty = t.quantity;
     const isBuy = qty > 0;
     const absQty = Math.abs(qty);
-    const totalOp = absQty * t.price;
-    const prev = byTicker[t.ticker] ?? { shares: 0, invested: 0 };
+    const totalOp = absQty * t.price + t.fees;
+    const prev = byTicker[t.ticker] ?? { shares: 0, invested: 0, avgCost: 0 };
 
     if (isBuy) {
-      byTicker[t.ticker] = { shares: prev.shares + absQty, invested: prev.invested + totalOp + t.fees };
+      const newShares = prev.shares + absQty;
+      const newInvested = prev.invested + totalOp;
+      byTicker[t.ticker] = { shares: newShares, invested: newInvested, avgCost: newShares > 0 ? newInvested / newShares : 0 };
     } else {
-      const costBasis = consumeLots(t.ticker, absQty);
-      byTicker[t.ticker] = {
-        shares: Math.max(0, prev.shares - absQty),
-        invested: prev.invested - (costBasis || prev.invested * (absQty / prev.shares)),
-      };
+      const newShares = Math.max(0, prev.shares - absQty);
+      const costBasis = prev.avgCost * absQty;
+      const newInvested = Math.max(0, prev.invested - costBasis);
+      byTicker[t.ticker] = { shares: newShares, invested: newInvested, avgCost: newShares > 0 ? newInvested / newShares : 0 };
     }
   }
 
@@ -66,18 +48,22 @@ export function syncAssetsFromTrades(): void {
       const info = detectAssetType(a.ticker);
       const sector = (a.sector && a.sector !== "A DEFINIR") ? a.sector : (getKnownSector(a.ticker) || info.sector);
       const newDividend = pos.shares * (a.dividendPerShare || 0);
-      updateAsset(a.id, {
+      const investedAmount = +pos.invested.toFixed(2);
+      const patch: Record<string, any> = {
         type: info.type,
         sector,
-        avgPrice,
         quantity: pos.shares,
-        investedAmount: +pos.invested.toFixed(2),
         currentDividend: newDividend > 0 ? newDividend : a.currentDividend,
         annualReturn: pos.shares * (a.dividendPerShare || 0) * 12,
-      });
-    } else if (pos && pos.shares <= 0 && a.investedAmount <= 0) {
-      // Sold all shares and no investment -> safe to remove
-      deleteAsset(a.id);
+      };
+      if (!a.manualInvested || a.investedAmount === 0) {
+        patch.avgPrice = avgPrice;
+        patch.investedAmount = investedAmount;
+      }
+      updateAsset(a.id, patch);
+    } else if (pos && pos.shares <= 0) {
+      // Sold all shares - update quantity to 0 and reset invested
+      updateAsset(a.id, { quantity: 0, investedAmount: 0, currentDividend: 0, annualReturn: 0 });
     }
     // Keep assets that have no trades at all (manually added)
   }

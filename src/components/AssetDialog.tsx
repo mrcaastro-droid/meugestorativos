@@ -1,13 +1,35 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, Component, type ReactNode } from "react";
 import type { Asset } from "../types";
 import { addAsset, updateAsset } from "../store";
 import { detectAssetType } from "../detectType";
 import { fetchSector } from "../sectorFetch";
 import { X } from "lucide-react";
 
+class DialogErrorBoundary extends Component<{ children: ReactNode; onClose: () => void }, { error: string }> {
+  state = { error: "" };
+  static getDerivedStateFromError(err: unknown) {
+    return { error: err instanceof Error ? err.message : String(err) };
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-card border border-border rounded-t-2xl sm:rounded-2xl w-full sm:max-w-lg sm:mx-4 p-6">
+            <h2 className="font-semibold text-red-400 mb-2">Erro ao carregar formulário</h2>
+            <p className="text-sm text-muted mb-4">{this.state.error}</p>
+            <button onClick={this.props.onClose} className="px-4 py-2 rounded-xl bg-primary text-white text-sm">Fechar</button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 interface Props {
   asset: Asset | null;
   onClose: () => void;
+  fixedIncomeOnly?: boolean;
 }
 
 const EMPTY_FORM = {
@@ -37,50 +59,64 @@ const EMPTY_FORM = {
 
 type FormData = typeof EMPTY_FORM;
 
-export function AssetDialog({ asset, onClose }: Props) {
+export function AssetDialog({ asset, onClose, fixedIncomeOnly = false }: Props) {
   const [form, setForm] = useState<FormData>(EMPTY_FORM);
+  const [manualInvested, setManualInvested] = useState(false);
 
   useEffect(() => {
     if (asset) {
       setForm({
-        ticker: asset.ticker,
-        type: asset.type,
+        ticker: asset.ticker ?? "",
+        type: asset.type ?? "FII",
         subtype: asset.subtype ?? "",
         sector: asset.sector ?? "",
-        paymentDay: asset.paymentDay?.toString() ?? "",
-        currentPrice: asset.currentPrice.toString(),
-        dividendPerShare: asset.dividendPerShare.toString(),
-        targetTotal: asset.targetTotal.toString(),
-        sharesNeeded: asset.sharesNeeded.toString(),
-        avgPrice: asset.avgPrice.toString(),
-        quantity: asset.quantity.toString(),
-        goal: asset.goal,
-        investedAmount: asset.investedAmount.toString(),
-        missing: asset.missing.toString(),
-        currentDividend: asset.currentDividend.toString(),
-        annualReturn: asset.annualReturn.toString(),
-        divYield12m: asset.divYield12m?.toString() ?? "",
-        representation: asset.representation.toString(),
-        percentInPortfolio: asset.percentInPortfolio.toString(),
+        paymentDay: asset.paymentDay != null ? String(asset.paymentDay) : "",
+        currentPrice: asset.currentPrice != null ? String(asset.currentPrice) : "0",
+        dividendPerShare: asset.dividendPerShare != null ? String(asset.dividendPerShare) : "0",
+        targetTotal: asset.targetTotal != null ? String(asset.targetTotal) : "0",
+        sharesNeeded: asset.sharesNeeded != null ? String(asset.sharesNeeded) : "0",
+        avgPrice: asset.avgPrice != null ? String(asset.avgPrice) : "0",
+        quantity: asset.quantity != null ? String(asset.quantity) : "0",
+        goal: asset.goal != null ? String(asset.goal) : "PAUSAR",
+        investedAmount: asset.investedAmount != null ? String(asset.investedAmount) : "0",
+        missing: asset.missing != null ? String(asset.missing) : "0",
+        currentDividend: asset.currentDividend != null ? String(asset.currentDividend) : "0",
+        annualReturn: asset.annualReturn != null ? String(asset.annualReturn) : "0",
+        divYield12m: asset.divYield12m != null ? String(asset.divYield12m) : "",
+        representation: asset.representation != null ? String(asset.representation) : "0",
+        percentInPortfolio: asset.percentInPortfolio != null ? String(asset.percentInPortfolio) : "0",
         status: asset.status ?? "",
-        magicMonth: asset.magicMonth.toString(),
-        magicNumber: asset.magicNumber.toString(),
+        magicMonth: asset.magicMonth != null ? String(asset.magicMonth) : "0",
+        magicNumber: asset.magicNumber != null ? String(asset.magicNumber) : "0",
       });
+      setManualInvested(asset.manualInvested === true);
     } else {
-      setForm(EMPTY_FORM);
+      setForm({ ...EMPTY_FORM, type: fixedIncomeOnly ? "CDB" : "FII" });
     }
-  }, [asset]);
+  }, [asset, fixedIncomeOnly]);
 
   function update(field: keyof FormData, value: string) {
+    if (field === "investedAmount") {
+      setManualInvested(true);
+      setForm(prev => {
+        const invested = parseNum(value);
+        const qty = parseNum(prev.quantity);
+        const newAvg = qty > 0 ? +(invested / qty).toFixed(2) : parseNum(prev.avgPrice);
+        return { ...prev, investedAmount: value, avgPrice: String(newAvg) };
+      });
+      return;
+    }
+    if (field === "avgPrice" || field === "quantity") {
+      setManualInvested(false);
+    }
     setForm((prev) => {
       const next = { ...prev, [field]: value };
 
-      // Auto-calculate derived fields
-      const qty = parseFloat(next.quantity) || 0;
-      const price = parseFloat(next.currentPrice) || 0;
-      const divPerShare = parseFloat(next.dividendPerShare) || 0;
-      const avgP = parseFloat(next.avgPrice) || price;
-      const totalTarget = parseFloat(next.targetTotal) || 0;
+      const qty = (parseFloat(next.quantity.replace(",", ".")) || 0);
+      const price = (parseFloat(next.currentPrice.replace(",", ".")) || 0);
+      const divPerShare = (parseFloat(next.dividendPerShare.replace(",", ".")) || 0);
+      const avgP = (parseFloat(next.avgPrice.replace(",", ".")) || 0) || price;
+      const totalTarget = (parseFloat(next.targetTotal.replace(",", ".")) || 0);
       const invested = avgP * qty;
 
       next.investedAmount = invested.toFixed(2);
@@ -94,20 +130,22 @@ export function AssetDialog({ asset, onClose }: Props) {
 
       if (price > 0) {
         next.magicNumber = price.toString();
-        next.magicMonth = (qty > 0 ? Math.ceil(price / (qty * divPerShare)) : 0).toString();
+        next.magicMonth = (qty > 0 && divPerShare > 0 ? Math.ceil(price / (qty * divPerShare)) : 0).toString();
       }
 
       return next;
     });
   }
 
+  function parseNum(v: string) { return parseFloat(v.replace(",", ".")) || 0; }
+
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const currentPrice = parseFloat(form.currentPrice) || 0;
-    const dividendPerShare = parseFloat(form.dividendPerShare) || 0;
-    const avgPriceValue = parseFloat(form.avgPrice) || currentPrice;
-    const quantity = parseFloat(form.quantity) || 0;
-    const investedAmountValue = avgPriceValue * quantity;
+    const currentPrice = parseNum(form.currentPrice);
+    const dividendPerShare = parseNum(form.dividendPerShare);
+    const quantity = parseNum(form.quantity);
+    const investedAmountValue = manualInvested ? (parseNum(form.investedAmount)) : (parseNum(form.avgPrice) || currentPrice) * quantity;
+    const avgPriceValue = manualInvested && quantity > 0 ? +(investedAmountValue / quantity).toFixed(2) : (parseNum(form.avgPrice) || currentPrice);
     const currentDividendValue = quantity * dividendPerShare;
     const annualReturnValue = currentDividendValue * 12;
 
@@ -120,20 +158,21 @@ export function AssetDialog({ asset, onClose }: Props) {
       currentPrice,
       dividendPerShare,
       dividendYield: currentPrice > 0 ? (dividendPerShare / currentPrice) * 100 : 0,
-      targetTotal: parseFloat(form.targetTotal) || 0,
-      sharesNeeded: parseFloat(form.sharesNeeded) || 0,
+      targetTotal: parseNum(form.targetTotal),
+      sharesNeeded: parseNum(form.sharesNeeded),
       avgPrice: avgPriceValue,
       quantity,
       goal: form.goal || "PAUSAR",
       investedAmount: investedAmountValue,
-      missing: parseFloat(form.missing) || Math.max(0, (parseFloat(form.targetTotal) || 0) - investedAmountValue),
+      manualInvested: manualInvested,
+      missing: parseNum(form.missing) || Math.max(0, parseNum(form.targetTotal) - investedAmountValue),
       currentDividend: currentDividendValue,
       annualReturn: annualReturnValue,
-      magicMonth: parseFloat(form.magicMonth) || 0,
-      magicNumber: parseFloat(form.magicNumber) || 0,
-      divYield12m: form.divYield12m ? parseFloat(form.divYield12m) : null,
-      representation: parseFloat(form.representation) || 0,
-      percentInPortfolio: parseFloat(form.percentInPortfolio) || 0,
+      magicMonth: parseNum(form.magicMonth),
+      magicNumber: parseNum(form.magicNumber),
+      divYield12m: form.divYield12m ? parseNum(form.divYield12m) : null,
+      representation: parseNum(form.representation),
+      percentInPortfolio: parseNum(form.percentInPortfolio),
       status: form.status.trim(),
     };
 
@@ -146,6 +185,7 @@ export function AssetDialog({ asset, onClose }: Props) {
   }
 
   return (
+    <DialogErrorBoundary onClose={onClose}>
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm">
       <div className="dialog-enter bg-card border border-border rounded-t-2xl sm:rounded-2xl w-full sm:max-w-lg max-h-[95vh] sm:max-h-[90vh] overflow-y-auto sm:mx-4">
         <div className="flex items-center justify-between p-5 border-b border-border sticky top-0 bg-card z-10">
@@ -171,7 +211,7 @@ export function AssetDialog({ asset, onClose }: Props) {
               label="Tipo"
               value={form.type}
               onChange={(v) => update("type", v)}
-              options={["FII", "AÇÃO", "ETF", "TESOURO", "CDB", "CRIPTO", "OUTRO"]}
+              options={fixedIncomeOnly ? ["CDB", "LCI", "LCA"] : ["FII", "AÇÃO", "ETF", "TESOURO", "CDB", "CRIPTO", "OUTRO"]}
             />
           </div>
 
@@ -189,6 +229,10 @@ export function AssetDialog({ asset, onClose }: Props) {
           <div className="grid grid-cols-2 gap-3">
             <Field label="Preço Médio (R$)" value={form.avgPrice} onChange={(v) => update("avgPrice", v)} type="number" />
             <Field label="Quantidade" value={form.quantity} onChange={(v) => update("quantity", v)} type="number" />
+          </div>
+
+          <div className="grid-cols-2 gap-3">
+            <Field label="Valor Investido (R$) — ajuste manual" value={form.investedAmount} onChange={(v) => update("investedAmount", v)} type="number" />
           </div>
 
           <div className="grid grid-cols-2 gap-3">
@@ -222,6 +266,7 @@ export function AssetDialog({ asset, onClose }: Props) {
         </form>
       </div>
     </div>
+    </DialogErrorBoundary>
   );
 }
 

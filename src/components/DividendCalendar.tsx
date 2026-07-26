@@ -2,7 +2,7 @@ import { useMemo, useState, useEffect } from "react";
 import type { Asset } from "../types";
 import { formatCurrency } from "../format";
 import { getDividends } from "../store";
-import { fetchLastDividends } from "../prices";
+import { fetchLastDividends, fetchUpcomingDividends, type UpcomingDividend } from "../prices";
 import { ChevronLeft, ChevronRight, CalendarDays, RefreshCw } from "lucide-react";
 
 interface Props {
@@ -18,14 +18,19 @@ export function DividendCalendar({ assets }: Props) {
   const [viewYear, setViewYear] = useState(today.getFullYear());
   const [viewMonth, setViewMonth] = useState(today.getMonth());
   const [divData, setDivData] = useState<Map<string, number>>(new Map());
+  const [upcomingDivs, setUpcomingDivs] = useState<UpcomingDividend[]>([]);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     const tickers = [...new Set(assets.map((a) => a.ticker))];
     if (tickers.length === 0) return;
     setLoading(true);
-    fetchLastDividends(tickers).then((map) => {
-      setDivData(map);
+    Promise.all([
+      fetchLastDividends(tickers),
+      fetchUpcomingDividends(tickers),
+    ]).then(([divMap, upcoming]) => {
+      setDivData(divMap);
+      setUpcomingDivs(upcoming);
       setLoading(false);
     });
   }, [assets]);
@@ -48,6 +53,21 @@ export function DividendCalendar({ assets }: Props) {
       }
     }
 
+    const ownedTickers = new Set(assets.map((a) => a.ticker.toUpperCase()));
+    for (const ud of upcomingDivs) {
+      if (!ownedTickers.has(ud.ticker)) continue;
+      const [y, m, day] = ud.date.split("-").map(Number);
+      if (y !== viewYear || m !== viewMonth + 1) continue;
+      if (!events[day]) events[day] = [];
+      const alreadyPaid = events[day].some(
+        (e) => e.ticker === ud.ticker && !e.isProjected
+      );
+      if (alreadyPaid) continue;
+      const asset = assets.find((a) => a.ticker.toUpperCase() === ud.ticker);
+      const value = ud.value * (asset?.quantity ?? 1);
+      events[day].push({ ticker: ud.ticker, value, isProjected: false });
+    }
+
     const now = new Date();
     for (const a of assets) {
       if (!a.paymentDay || a.paymentDay < 1 || a.paymentDay > 31) continue;
@@ -61,6 +81,8 @@ export function DividendCalendar({ assets }: Props) {
         );
         if (hasActual) continue;
       }
+      const alreadyInEvents = events[a.paymentDay]?.some((e) => e.ticker === a.ticker);
+      if (alreadyInEvents) continue;
       const projValue = getProjectedValue(a);
       if (projValue <= 0) continue;
       if (!events[a.paymentDay]) events[a.paymentDay] = [];
@@ -68,7 +90,7 @@ export function DividendCalendar({ assets }: Props) {
     }
 
     return events;
-  }, [viewYear, viewMonth, assets, dividends, divData]);
+  }, [viewYear, viewMonth, assets, dividends, divData, upcomingDivs]);
 
   const calendar = useMemo(() => {
     const firstDay = new Date(viewYear, viewMonth, 1).getDay();
@@ -83,11 +105,23 @@ export function DividendCalendar({ assets }: Props) {
   const upcoming = useMemo(() => {
     const now = new Date();
     const list: { date: Date; ticker: string; value: number; isProjected: boolean }[] = [];
+    const ownedTickers = new Set(assets.map((a) => a.ticker.toUpperCase()));
+
+    for (const ud of upcomingDivs) {
+      if (!ownedTickers.has(ud.ticker)) continue;
+      const dt = new Date(ud.date + "T12:00:00");
+      if (dt <= now) continue;
+      const asset = assets.find((a) => a.ticker.toUpperCase() === ud.ticker);
+      const value = ud.value * (asset?.quantity ?? 1);
+      if (value <= 0) continue;
+      list.push({ date: dt, ticker: ud.ticker, value, isProjected: false });
+    }
 
     for (const d of dividends) {
       const dt = new Date(d.payment + "T12:00:00");
       if (dt > now) {
-        list.push({ date: dt, ticker: d.ticker, value: d.totalValue, isProjected: false });
+        const already = list.some((l) => l.ticker === d.ticker && l.date.getTime() === dt.getTime());
+        if (!already) list.push({ date: dt, ticker: d.ticker, value: d.totalValue, isProjected: false });
       }
     }
 
@@ -100,14 +134,17 @@ export function DividendCalendar({ assets }: Props) {
         if (dt <= now) continue;
         const key = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(a.paymentDay).padStart(2, "0")}`;
         const hasReal = dividends.some((d) => d.ticker === a.ticker && d.payment === key);
-        if (!hasReal) {
+        const hasConfirmed = upcomingDivs.some(
+          (ud) => ud.ticker.toUpperCase() === a.ticker.toUpperCase() && ud.date === key
+        );
+        if (!hasReal && !hasConfirmed) {
           list.push({ date: dt, ticker: a.ticker, value: projValue, isProjected: true });
         }
       }
     }
 
     return list.sort((a, b) => a.date.getTime() - b.date.getTime()).slice(0, 8);
-  }, [assets, dividends, divData]);
+  }, [assets, dividends, divData, upcomingDivs]);
 
   function prevMonth() {
     if (viewMonth === 0) { setViewYear(viewYear - 1); setViewMonth(11); }

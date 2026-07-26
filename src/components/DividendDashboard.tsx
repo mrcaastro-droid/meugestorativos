@@ -1,15 +1,16 @@
 import { useMemo, useState } from "react";
-import type { DividendRecord } from "../types";
+import type { DividendRecord, Asset } from "../types";
 import { formatCurrency } from "../format";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell
+  PieChart, Pie, Cell, Legend
 } from "recharts";
 import { X } from "lucide-react";
 import { AssetLogo } from "./AssetLogo";
 
 interface Props {
   dividends: DividendRecord[];
+  assets: Asset[];
   hideValues: boolean;
   onRefresh?: () => void;
 }
@@ -21,7 +22,7 @@ function mask(v: number, hidden: boolean) {
   return hidden ? "R$ ••••" : formatCurrency(v);
 }
 
-export function DividendDashboard({ dividends, hideValues, onRefresh }: Props) {
+export function DividendDashboard({ dividends, assets, hideValues, onRefresh }: Props) {
   const [filterType, setFilterType] = useState("");
   const [filterYears, setFilterYears] = useState<number[]>([]);
   const [selectedTicker, setSelectedTicker] = useState("");
@@ -113,6 +114,24 @@ export function DividendDashboard({ dividends, hideValues, onRefresh }: Props) {
   }, [filtered, filterYears]);
 
   const avgAnnual = avgMonthly * 12;
+
+  const patrimonyData = useMemo(() => {
+    const byTicker: Record<string, { invested: number; current: number }> = {};
+    for (const a of assets) {
+      const key = a.ticker;
+      if (!byTicker[key]) byTicker[key] = { invested: 0, current: 0 };
+      byTicker[key].invested += a.investedAmount;
+      byTicker[key].current += a.currentPrice * a.quantity;
+    }
+    return Object.entries(byTicker)
+      .map(([ticker, v]) => ({
+        ticker,
+        "Valor Aplicado": Math.round(v.invested),
+        Patrimônio: Math.round(v.current),
+      }))
+      .sort((a, b) => b.Patrimônio - a.Patrimônio)
+      .slice(0, 15);
+  }, [assets]);
 
   return (
     <div className="space-y-4">
@@ -294,6 +313,28 @@ export function DividendDashboard({ dividends, hideValues, onRefresh }: Props) {
                 </ResponsiveContainer>
               </div>
             </div>
+
+            {/* Valor Aplicado x Patrimônio */}
+            {patrimonyData.length > 0 && (
+              <div className="bg-card border border-border rounded-2xl p-5">
+                <h3 className="font-semibold text-sm mb-4">Valor Aplicado x Patrimônio</h3>
+                <div className="h-72">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={patrimonyData} layout="vertical" barGap={0}>
+                      <XAxis type="number" tick={{ fontSize: 11, fill: "#64748b" }} axisLine={false} tickLine={false} tickFormatter={(v) => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v)} />
+                      <YAxis type="category" dataKey="ticker" tick={{ fontSize: 11, fill: "#64748b" }} axisLine={false} tickLine={false} width={60} />
+                      <Tooltip
+                        contentStyle={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 12, fontSize: 13 }}
+                        formatter={(v: number) => formatCurrency(v)}
+                      />
+                      <Legend wrapperStyle={{ fontSize: 11 }} />
+                      <Bar dataKey="Valor Aplicado" fill="#3b82f6" radius={[0, 4, 4, 0]} barSize={12} />
+                      <Bar dataKey="Patrimônio" fill="#10b981" radius={[0, 4, 4, 0]} barSize={12} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            )}
 
             {/* Year cards */}
             {byYear.length > 0 && (

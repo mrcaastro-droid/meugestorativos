@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
-import type { Asset, PortfolioSummary, ContributionRecord, TradeRecord, DividendRecord } from "../types";
+import type { Asset, PortfolioSummary, ContributionRecord, TradeRecord, DividendRecord, FixedIncomeRecord } from "../types";
 import { formatCurrency, formatCompact, formatPercent } from "../format";
-import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, AreaChart, Area, XAxis, YAxis } from "recharts";
+import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, XAxis, YAxis } from "recharts";
 import { AssetLogo } from "./AssetLogo";
 
 interface Props {
@@ -11,6 +11,7 @@ interface Props {
   contributions: ContributionRecord[];
   trades: TradeRecord[];
   dividends?: DividendRecord[];
+  fixedIncome?: FixedIncomeRecord[];
 }
 
 function mask(v: number, hidden: boolean) {
@@ -46,9 +47,20 @@ function getTypeColor(type: string): string {
   return map[type] ?? "#6b7280";
 }
 
-export function Dashboard({ summary, assets, hideValues, contributions, trades, dividends }: Props) {
+export function Dashboard({ summary, assets, hideValues, contributions, trades, dividends, fixedIncome = [] }: Props) {
   const [selectedSegment, setSelectedSegment] = useState<string | null>(null);
   const [selectedFIISegment, setSelectedFIISegment] = useState<string | null>(null);
+
+  const fixedIncomeTotal = useMemo(() => {
+    return fixedIncome.reduce((s, r) => s + r.currentValue, 0);
+  }, [fixedIncome]);
+
+  const fixedIncomeInvested = useMemo(() => {
+    return fixedIncome.reduce((s, r) => s + r.investedAmount, 0);
+  }, [fixedIncome]);
+
+  const totalPatrimony = summary.totalCurrentValue + fixedIncomeTotal;
+  const totalInvested = summary.totalInvested + fixedIncomeInvested;
 
   const typeData = Object.entries(summary.types)
     .map(([name, value]) => ({ name, value: Math.round(value) }))
@@ -139,8 +151,8 @@ export function Dashboard({ summary, assets, hideValues, contributions, trades, 
 
   const maxDividend = topAssets.length > 0 ? topAssets[0].currentDividend : 0;
 
-  const realInvested = summary.totalInvested;
-  const diff = summary.totalCurrentValue - realInvested;
+  const realInvested = totalInvested;
+  const diff = totalPatrimony - realInvested;
   const rentPct = realInvested > 0 ? (diff / realInvested) * 100 : 0;
 
   const { netWorthData, cumulativeAportes } = useMemo(() => {
@@ -158,13 +170,13 @@ export function Dashboard({ summary, assets, hideValues, contributions, trades, 
       if (!dates.has(today)) {
         dates.set(today, {
           aportado: cumulativeAportes,
-          patrimonio: summary.totalCurrentValue || cumulativeAportes,
+          patrimonio: totalPatrimony || cumulativeAportes,
         });
       } else {
         const lastEntry = Array.from(dates.entries()).pop()!;
         dates.set(lastEntry[0], {
           ...lastEntry[1],
-          patrimonio: summary.totalCurrentValue || cumulativeAportes,
+          patrimonio: totalPatrimony || cumulativeAportes,
         });
       }
     }
@@ -176,7 +188,7 @@ export function Dashboard({ summary, assets, hideValues, contributions, trades, 
     }));
 
     return { netWorthData: data, cumulativeAportes };
-  }, [contributions, summary.totalCurrentValue]);
+  }, [contributions, totalPatrimony]);
 
   return (
     <div className="space-y-6">
@@ -184,10 +196,10 @@ export function Dashboard({ summary, assets, hideValues, contributions, trades, 
         <SummaryCard label="Total Investido" value={mask(realInvested, hideValues)} accent="blue" />
         <SummaryCard label="Dividendo Mensal" value={mask(summary.monthlyDividend, hideValues)} accent="green" />
         <SummaryCard label="Dividendo Anual" value={mask(summary.annualDividend, hideValues)} accent="green" />
-        <SummaryCard label="Carteira" value={String(summary.assetCount)} accent="purple" />
+        <SummaryCard label="Carteira" value={String(summary.assetCount + fixedIncome.length)} accent="purple" />
         <div className="bg-card border border-border rounded-2xl p-4 border-l-2 border-l-amber-500">
           <p className="text-xs text-muted mb-1">Patrimônio Atual</p>
-          <p className="text-lg font-bold tabular">{mask(summary.totalCurrentValue, hideValues)}</p>
+          <p className="text-lg font-bold tabular">{mask(totalPatrimony, hideValues)}</p>
           <p className="text-xs text-muted mt-0.5">(investido: {mask(realInvested, hideValues)})</p>
         </div>
       </div>
@@ -308,48 +320,6 @@ export function Dashboard({ summary, assets, hideValues, contributions, trades, 
           subValue={realInvested > 0 ? `${diff >= 0 ? "+" : ""}${mask(diff, hideValues)}` : undefined}
         />
       </div>
-
-      {netWorthData.length > 1 && (
-        <div className="bg-card border border-border rounded-2xl p-5">
-          <h3 className="font-semibold text-sm mb-4">Evolução do Patrimônio</h3>
-          <div className="h-64">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={netWorthData}>
-                <defs>
-                  <linearGradient id="gradAportado" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3} />
-                    <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
-                  </linearGradient>
-                  <linearGradient id="gradPatrimonio" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.3} />
-                    <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <XAxis dataKey="date" tick={{ fontSize: 11, fill: "#64748b" }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fontSize: 11, fill: "#64748b" }} axisLine={false} tickLine={false} />
-                <Tooltip
-                  contentStyle={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 12, fontSize: 13 }}
-                  formatter={(v: number) => formatCurrency(v)}
-                />
-                <Area type="monotone" dataKey="Aportado" stroke="#3b82f6" strokeWidth={2} fill="url(#gradAportado)" />
-                <Area type="monotone" dataKey="Patrimônio" stroke="#10b981" strokeWidth={2} fill="url(#gradPatrimonio)" />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-          <div className="flex items-center gap-4 mt-3 text-xs">
-            <div className="flex items-center gap-1.5">
-              <span className="size-2.5 rounded-full bg-blue-500" />
-              <span className="text-muted">Total Aportado</span>
-              <span className="font-medium tabular">{mask(cumulativeAportes, hideValues)}</span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span className="size-2.5 rounded-full bg-emerald-500" />
-              <span className="text-muted">Patrimônio Atual</span>
-              <span className="font-medium tabular">{mask(summary.totalCurrentValue, hideValues)}</span>
-            </div>
-          </div>
-        </div>
-      )}
 
       {fiiSectorData.length > 0 && (
         <div className="bg-card border border-border rounded-2xl p-5">

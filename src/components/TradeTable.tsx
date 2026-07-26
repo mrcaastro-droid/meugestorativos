@@ -225,6 +225,7 @@ export function TradeTable({ trades, hideValues, onRefresh, onEdit }: Props) {
                       }`}>
                         {t.operation === "COMPRA" ? "C" : "V"}
                       </span>
+                      {t.note && <span className="ml-1 text-[10px] text-muted">({t.note})</span>}
                     </td>
                     <td className="p-2 text-right tabular">{Math.abs(t.quantity)}</td>
                     <td className="p-2 text-right tabular">{mask(t.price, hideValues)}</td>

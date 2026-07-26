@@ -1,4 +1,4 @@
-import type { Asset, PortfolioSummary, DividendRecord, ContributionRecord, TradeRecord, Lot } from "./types";
+import type { Asset, PortfolioSummary, DividendRecord, ContributionRecord, TradeRecord, Lot, FixedIncomeRecord } from "./types";
 import { createSeedData } from "./seed";
 import { detectAssetType } from "./detectType";
 
@@ -63,6 +63,7 @@ export function exportAllData(): string {
     contributions: load<ContributionRecord>(APORTE_KEY),
     trades: load<TradeRecord>(TRADE_KEY),
     lots: load<Lot>(LOT_KEY),
+    fixedIncome: getFixedIncome(),
   }, null, 2);
 }
 
@@ -296,11 +297,13 @@ export function importFullBackup(data: {
   dividends?: DividendRecord[];
   contributions?: ContributionRecord[];
   trades?: TradeRecord[];
+  fixedIncome?: FixedIncomeRecord[];
 }) {
   if (data.assets) saveAssets(data.assets);
   if (data.dividends) save(DIVIDEND_KEY, data.dividends);
   if (data.contributions) save(APORTE_KEY, data.contributions);
   if (data.trades) save(TRADE_KEY, data.trades);
+  if (data.fixedIncome) save(FIXED_INCOME_KEY, data.fixedIncome);
 }
 
 export function reclassifyAssets(): number {
@@ -393,7 +396,56 @@ export function clearAll() {
   localStorage.removeItem(APORTE_KEY);
   localStorage.removeItem(TRADE_KEY);
   localStorage.removeItem(LOT_KEY);
+  localStorage.removeItem(FIXED_INCOME_KEY);
   localStorage.removeItem("gestor-last-price-update");
+}
+
+// ---- Fixed Income (CDB, LCI, LCA) ----
+
+const FIXED_INCOME_KEY = "gestor-ativos-renda-fixa";
+
+export function getFixedIncome(): FixedIncomeRecord[] {
+  return load<FixedIncomeRecord>(FIXED_INCOME_KEY);
+}
+
+export function addFixedIncome(data: Omit<FixedIncomeRecord, "id" | "createdAt" | "updatedAt">): FixedIncomeRecord {
+  const list = getFixedIncome();
+  const now = new Date().toISOString();
+  const rec: FixedIncomeRecord = { id: generateId(), ...data, createdAt: now, updatedAt: now };
+  list.push(rec);
+  save(FIXED_INCOME_KEY, list);
+  return rec;
+}
+
+export function updateFixedIncome(id: string, data: Partial<FixedIncomeRecord>): FixedIncomeRecord | null {
+  const list = getFixedIncome();
+  const idx = list.findIndex((r) => r.id === id);
+  if (idx === -1) return null;
+  list[idx] = { ...list[idx], ...data, updatedAt: new Date().toISOString() };
+  save(FIXED_INCOME_KEY, list);
+  return list[idx];
+}
+
+export function deleteFixedIncome(id: string): boolean {
+  const list = getFixedIncome().filter((r) => r.id !== id);
+  save(FIXED_INCOME_KEY, list);
+  return true;
+}
+
+export function getFixedIncomeSummary(records: FixedIncomeRecord[]) {
+  const totalInvested = records.reduce((s, r) => s + r.investedAmount, 0);
+  const totalCurrentValue = records.reduce((s, r) => s + r.currentValue, 0);
+  const totalReturn = totalCurrentValue - totalInvested;
+  const returnPct = totalInvested > 0 ? (totalReturn / totalInvested) * 100 : 0;
+
+  const byType: Record<string, number> = {};
+  const byInstitution: Record<string, number> = {};
+  records.forEach((r) => {
+    byType[r.type] = (byType[r.type] ?? 0) + r.currentValue;
+    byInstitution[r.institution] = (byInstitution[r.institution] ?? 0) + r.currentValue;
+  });
+
+  return { totalInvested, totalCurrentValue, totalReturn, returnPct, byType, byInstitution };
 }
 
 export function resetAndReseedData() {

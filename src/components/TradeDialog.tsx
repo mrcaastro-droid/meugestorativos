@@ -15,12 +15,20 @@ export function TradeDialog({ onClose, tickers, editTrade }: Props) {
     ticker: editTrade?.ticker ?? tickers[0] ?? "",
     quantity: editTrade ? String(editTrade.quantity) : "",
     price: editTrade ? String(editTrade.price) : "",
+    note: editTrade?.note ?? "",
   });
 
   const isEditing = !!editTrade;
 
   function update(field: string, value: string) {
-    setForm((prev) => ({ ...prev, [field]: value }));
+    setForm((prev) => {
+      const next = { ...prev, [field]: value };
+      if (field === "price") {
+        const p = parseFloat(value.replace(",", ".")) || 0;
+        if (p <= 0 && value !== "") next.note = "BÔNUS";
+      }
+      return next;
+    });
   }
 
   function handleSubmit(e: React.FormEvent) {
@@ -29,7 +37,7 @@ export function TradeDialog({ onClose, tickers, editTrade }: Props) {
     const ticker = form.ticker.toUpperCase().trim();
     const qty = parseFloat(form.quantity) || 0;
     const price = parseFloat(form.price.replace(",", ".")) || 0;
-    if (!ticker || qty === 0 || price <= 0) return;
+    if (!ticker || qty === 0) return;
 
     const absQty = Math.abs(qty);
     const totalOp = absQty * price;
@@ -85,6 +93,7 @@ export function TradeDialog({ onClose, tickers, editTrade }: Props) {
       totalShares: newShares,
       avgPrice,
       operation: operationType,
+      note: form.note.trim() || undefined,
     });
 
     onClose();
@@ -157,6 +166,17 @@ export function TradeDialog({ onClose, tickers, editTrade }: Props) {
                 className="w-full px-3 py-2 bg-surface border border-border rounded-xl text-sm focus:outline-none focus:border-primary transition-colors"
               />
             </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-xs text-muted font-medium">Observação</label>
+            <input
+              type="text"
+              value={form.note}
+              onChange={(e) => update("note", e.target.value)}
+              placeholder="Ex: BÔNUS, FRACIONÁRIO, etc."
+              className="w-full px-3 py-2 bg-surface border border-border rounded-xl text-sm focus:outline-none focus:border-primary transition-colors"
+            />
           </div>
 
           <p className="text-xs text-muted">

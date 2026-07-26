@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo, useRef } from "react";
-import type { Asset, DividendRecord, ContributionRecord, TradeRecord } from "./types";
-import { getAssets, getDividends, getContributions, getTrades, calculateSummary, addAsset, updateAsset, clearAll, clearDividends, clearContributions, importFullBackup, importSeedData, cleanupOrphanAssets, initFromRemoteData, exportAllData } from "./store";
+import type { Asset, DividendRecord, ContributionRecord, TradeRecord, FixedIncomeRecord } from "./types";
+import { getAssets, getDividends, getContributions, getTrades, getFixedIncome, calculateSummary, addAsset, updateAsset, clearAll, clearDividends, clearContributions, importFullBackup, importSeedData, cleanupOrphanAssets, initFromRemoteData, exportAllData } from "./store";
 import { syncAssetsFromTrades } from "./assetHelper";
+import { detectAssetType } from "./detectType";
 import { Dashboard } from "./components/Dashboard";
 import { AssetTable } from "./components/AssetTable";
 import { AssetDialog } from "./components/AssetDialog";
@@ -22,13 +23,15 @@ import { DividendAlerts } from "./components/DividendAlerts";
 import { DividendCalendar } from "./components/DividendCalendar";
 import { UpdateToast } from "./components/UpdateToast";
 import { FIIAnalysis } from "./components/FIIAnalysis";
+import { FixedIncomeTable } from "./components/FixedIncomeTable";
+import { FixedIncomeDialog } from "./components/FixedIncomeDialog";
 import { logoutFirebase, onAuthChange } from "./firebase";
 import { FirebaseLogin } from "./components/FirebaseLogin";
 import { loadUserData, setLocalData, getAllLocalData, scheduleSave, forceSaveNow } from "./sync";
 import { getKnownSector } from "./sectorFetch";
-import { TrendingUp, Plus, Upload, Download, Trash2, Eye, EyeOff, LayoutDashboard, Briefcase, HandCoins, PiggyBank, ArrowLeftRight, Target, FileText, Building2 } from "lucide-react";
+import { TrendingUp, Plus, Upload, Download, Trash2, Eye, EyeOff, LayoutDashboard, Briefcase, HandCoins, PiggyBank, ArrowLeftRight, Target, FileText, Building2, Landmark } from "lucide-react";
 
-type Tab = "dashboard" | "assets" | "dividendos" | "aportes" | "trades" | "planejamento" | "analise-fii";
+type Tab = "dashboard" | "assets" | "dividendos" | "aportes" | "trades" | "planejamento" | "analise-fii" | "renda-fixa";
 
 type FirebaseUser = { uid: string; displayName: string | null; email: string | null; photoURL: string | null };
 
@@ -39,6 +42,7 @@ export default function App() {
   const [dividends, setDividends] = useState<DividendRecord[]>([]);
   const [contributions, setContributions] = useState<ContributionRecord[]>([]);
   const [trades, setTrades] = useState<TradeRecord[]>([]);
+  const [fixedIncome, setFixedIncome] = useState<FixedIncomeRecord[]>([]);
   const [tab, setTab] = useState<Tab>("dashboard");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editAsset, setEditAsset] = useState<Asset | null>(null);
@@ -50,6 +54,8 @@ export default function App() {
   const [tradeDialogOpen, setTradeDialogOpen] = useState(false);
   const [tradeImportOpen, setTradeImportOpen] = useState(false);
   const [editTrade, setEditTrade] = useState<TradeRecord | null>(null);
+  const [fixedIncomeDialogOpen, setFixedIncomeDialogOpen] = useState(false);
+  const [editFixedIncome, setEditFixedIncome] = useState<FixedIncomeRecord | null>(null);
   const [irpfOpen, setIrpfOpen] = useState(false);
   const [divSubTab, setDivSubTab] = useState<"historico" | "dashboard" | "calendario">("dashboard");
   const [hideValues, setHideValues] = useState(false);
@@ -82,17 +88,21 @@ export default function App() {
     const unsub = onAuthChange(async (fbUser) => {
       if (fbUser) {
         setFirebaseUser({ uid: fbUser.uid, displayName: fbUser.displayName, email: fbUser.email, photoURL: fbUser.photoURL });
-        // Carregar dados do Firestore
         const remoteData = await loadUserData(fbUser.uid);
         const localData = getAllLocalData();
         const hasLocal = localData.assets.length > 0;
         console.log("[Sync] Firestore:", remoteData?.assets?.length ?? 0, "Local:", localData.assets.length);
-        if (remoteData && remoteData.assets?.length > 0) {
-          // Firestore tem dados — usar eles
-          console.log("[Sync] Carregando do Firestore");
-          setLocalData(remoteData);
+        if (remoteData && remoteData.assets?.length > 0 && remoteData.updatedAt) {
+          const remoteTime = new Date(remoteData.updatedAt).getTime();
+          const savedTime = parseInt(localStorage.getItem("gestor-last-save") || "0", 10);
+          if (remoteTime > savedTime) {
+            console.log("[Sync] Firestore mais recente — carregando");
+            setLocalData(remoteData);
+          } else {
+            console.log("[Sync] Local mais recente — salvando no Firestore");
+            await forceSaveNow(fbUser.uid);
+          }
         } else if (hasLocal) {
-          // Local tem dados mas Firestore não — salvar no Firestore
           console.log("[Sync] Salvando dados locais no Firestore");
           await forceSaveNow(fbUser.uid);
         } else {
@@ -108,23 +118,36 @@ export default function App() {
 
   const summary = useMemo(() => calculateSummary(assets, dividends), [assets, dividends]);
 
-  function refresh() {
+  async function refresh() {
     syncAssetsFromTrades();
     setAssets([...getAssets()]);
     setDividends([...getDividends()]);
     setContributions([...getContributions()]);
     setTrades([...getTrades()]);
+    setFixedIncome([...getFixedIncome()]);
     if (firebaseUser) {
-      forceSaveNow(firebaseUser.uid);
+      await forceSaveNow(firebaseUser.uid);
     }
   }
 
   useEffect(() => {
     initFromRemoteData().then(() => {
       updateMissingSectors();
+      fixMisclassifiedUnits();
       refresh();
     });
   }, []);
+
+  function fixMisclassifiedUnits() {
+    for (const a of getAssets()) {
+      if (a.type === "FII") {
+        const detected = detectAssetType(a.ticker);
+        if (detected.type !== "FII") {
+          updateAsset(a.id, { type: detected.type });
+        }
+      }
+    }
+  }
 
   function updateMissingSectors() {
     let changed = false;
@@ -442,6 +465,9 @@ export default function App() {
           <TabButton active={tab === "analise-fii"} onClick={() => setTab("analise-fii")} icon={Building2}>
             FII <span className="text-[10px] opacity-70">({fiiAssets.length})</span>
           </TabButton>
+          <TabButton active={tab === "renda-fixa"} onClick={() => setTab("renda-fixa")} icon={Landmark}>
+            Renda Fixa <span className="text-[10px] opacity-70">({fixedIncome.length})</span>
+          </TabButton>
           <TabButton active={tab === "planejamento"} onClick={() => setTab("planejamento")} icon={Target}>
             Meta
           </TabButton>
@@ -454,7 +480,7 @@ export default function App() {
           <div className="flex items-center gap-2 mb-4">
             <div className="flex-1" />
             <button
-              onClick={() => { setEditAsset(null); setDialogOpen(true); }}
+              onClick={() => { setEditFixedIncome(null); setFixedIncomeDialogOpen(true); }}
               className="flex items-center gap-2 px-3 sm:px-4 py-2 bg-primary text-white rounded-xl text-xs sm:text-sm font-medium hover:bg-primary-dark transition-colors min-h-[40px]"
             >
               <Plus className="size-4" /> <span className="hidden sm:inline">Novo </span>Ativo
@@ -504,10 +530,22 @@ export default function App() {
           </div>
         )}
 
-        {tab === "dashboard" && <Dashboard summary={summary} assets={assets} hideValues={hideValues} contributions={contributions} trades={trades} dividends={dividends} />}
+        {tab === "renda-fixa" && (
+          <div className="flex items-center gap-2 mb-4">
+            <div className="flex-1" />
+            <button
+              onClick={() => { setEditFixedIncome(null); setFixedIncomeDialogOpen(true); }}
+              className="flex items-center gap-2 px-3 sm:px-4 py-2 bg-primary text-white rounded-xl text-xs sm:text-sm font-medium hover:bg-primary-dark transition-colors min-h-[40px]"
+            >
+              <Plus className="size-4" /> <span className="hidden sm:inline">Novo </span>Investimento
+            </button>
+          </div>
+        )}
+
+        {tab === "dashboard" && <Dashboard summary={summary} assets={assets} hideValues={hideValues} contributions={contributions} trades={trades} dividends={dividends} fixedIncome={fixedIncome} />}
 
         {tab === "assets" && (
-          <AssetTable assets={assets} hideValues={hideValues} onEdit={handleEdit} onRefresh={refresh} />
+          <AssetTable assets={assets} fixedIncome={fixedIncome} hideValues={hideValues} onEdit={handleEdit} onEditFixedIncome={(r) => { setEditFixedIncome(r); setFixedIncomeDialogOpen(true); }} onRefresh={refresh} />
         )}
 
         {tab === "dividendos" && (
@@ -553,7 +591,7 @@ export default function App() {
               )}
             </div>
             {divSubTab === "dashboard" ? (
-              <DividendDashboard dividends={dividends} hideValues={hideValues} onRefresh={refresh} />
+              <DividendDashboard dividends={dividends} assets={assets} hideValues={hideValues} onRefresh={refresh} />
             ) : divSubTab === "calendario" ? (
               <DividendCalendar assets={assets} />
             ) : (
@@ -574,6 +612,10 @@ export default function App() {
           <FIIAnalysis fiiAssets={fiiAssets} hideValues={hideValues}
             onEdit={(a) => { setEditAsset(a); setDialogOpen(true); }} onRefresh={refresh} />
         )}
+        {tab === "renda-fixa" && (
+          <FixedIncomeTable records={fixedIncome} hideValues={hideValues} onRefresh={refresh}
+            onEdit={(r) => { setEditFixedIncome(r); setFixedIncomeDialogOpen(true); }} />
+        )}
         {tab === "planejamento" && (
           <PlanningPage assets={assets} dividends={dividends} contributions={contributions} trades={trades} hideValues={hideValues} />
         )}
@@ -585,7 +627,7 @@ export default function App() {
         </div>
       </footer>
 
-      {dialogOpen && <AssetDialog asset={editAsset} onClose={handleClose} />}
+      {dialogOpen && <AssetDialog asset={editAsset} onClose={handleClose} fixedIncomeOnly={!editAsset} />}
       {csvOpen && <CSVImport onClose={() => { setCsvOpen(false); refresh(); }} />}
       {divDialogOpen && <DividendDialog onClose={() => { setDivDialogOpen(false); refresh(); }} tickers={assetTickers} />}
       {divCsvOpen && <DividendImport onClose={() => { setDivCsvOpen(false); refresh(); }} />}
@@ -593,6 +635,7 @@ export default function App() {
       {aportCsvOpen && <ContributionImport onClose={() => { setAportCsvOpen(false); refresh(); }} />}
       {tradeDialogOpen && <TradeDialog onClose={() => { setTradeDialogOpen(false); setEditTrade(null); refresh(); }} tickers={assetTickers} editTrade={editTrade} />}
       {tradeImportOpen && <TradeImport onClose={() => { setTradeImportOpen(false); refresh(); }} />}
+      {fixedIncomeDialogOpen && <FixedIncomeDialog editing={editFixedIncome} onClose={() => { setFixedIncomeDialogOpen(false); setEditFixedIncome(null); refresh(); }} />}
       {irpfOpen && <IRPFReport trades={trades} dividends={dividends} onClose={() => setIrpfOpen(false)} />}
       <UpdateToast />
     </div>
